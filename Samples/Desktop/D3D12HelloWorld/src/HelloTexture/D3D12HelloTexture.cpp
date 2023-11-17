@@ -11,6 +11,8 @@
 
 #include "stdafx.h"
 #include "D3D12HelloTexture.h"
+#include <d3d11_1.h>
+
 
 D3D12HelloTexture::D3D12HelloTexture(UINT width, UINT height, std::wstring name) :
     DXSample(width, height, name),
@@ -274,6 +276,7 @@ void D3D12HelloTexture::LoadAssets()
 
     // Create the texture.
     {
+#if 0
         // Describe and create a Texture2D.
         D3D12_RESOURCE_DESC textureDesc = {};
         textureDesc.MipLevels = 1;
@@ -293,6 +296,28 @@ void D3D12HelloTexture::LoadAssets()
             D3D12_RESOURCE_STATE_COPY_DEST,
             nullptr,
             IID_PPV_ARGS(&m_texture)));
+#else
+		// Describe and create a Texture2D.
+		D3D12_RESOURCE_DESC textureDesc = {};
+		textureDesc.MipLevels = 1;
+		textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		textureDesc.Width = TextureWidth;
+		textureDesc.Height = TextureHeight;
+		textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+		textureDesc.DepthOrArraySize = 1;
+		textureDesc.SampleDesc.Count = 1;
+		textureDesc.SampleDesc.Quality = 0;
+		textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+
+		ThrowIfFailed(m_device->CreateCommittedResource(
+			&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+			D3D12_HEAP_FLAG_SHARED,
+			&textureDesc,
+			D3D12_RESOURCE_STATE_COPY_DEST, // D3D12_RESOURCE_STATE_COPY_DEST,
+			nullptr,
+			IID_PPV_ARGS(&m_texture)));
+
+#endif
 
         const UINT64 uploadBufferSize = GetRequiredIntermediateSize(m_texture.Get(), 0, 1);
 
@@ -348,6 +373,124 @@ void D3D12HelloTexture::LoadAssets()
         // complete before continuing.
         WaitForPreviousFrame();
     }
+
+	{
+		HRESULT hr;
+		HANDLE m_sharedTextureHandle;
+		ThrowIfFailed(hr = m_device->CreateSharedHandle(
+			m_texture.Get(),
+			nullptr,
+			GENERIC_ALL,
+			nullptr,
+			&m_sharedTextureHandle));
+		//m_sharedTextureHandle = m_sharedTextureHandle;
+
+		static D3D_FEATURE_LEVEL FeatureLevels[] = {
+			D3D_FEATURE_LEVEL_11_1,
+			D3D_FEATURE_LEVEL_11_0,
+			D3D_FEATURE_LEVEL_10_1,
+			D3D_FEATURE_LEVEL_10_0
+		};
+
+		IDXGIFactory2* DxgiFactory;
+		IDXGIAdapter* DxgiAdapter;
+		DXGI_ADAPTER_DESC DxgiAdapterDesc;
+		ID3D11Texture2D* Texture;
+
+		ID3D11Device* D3d11Device;
+		D3D_FEATURE_LEVEL FeatureLevel;
+		ID3D11DeviceContext* D3d11DeviceContext;
+
+		hr = CreateDXGIFactory2(0, IID_PPV_ARGS(&DxgiFactory));
+		hr = DxgiFactory->EnumAdapters(0, &DxgiAdapter);
+		hr = DxgiAdapter->GetDesc(&DxgiAdapterDesc);
+		hr = D3D11CreateDevice(DxgiAdapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr, D3D11_CREATE_DEVICE_DEBUG, FeatureLevels, 4, D3D11_SDK_VERSION, &D3d11Device, &FeatureLevel, &D3d11DeviceContext);
+
+#define SHARED_TEXTURE_WIDTH   256
+#define SHARED_TEXTURE_HEIGHT  256
+
+		CD3D11_TEXTURE2D_DESC TextureDesc(DXGI_FORMAT_R8G8B8A8_UNORM, SHARED_TEXTURE_WIDTH, SHARED_TEXTURE_HEIGHT, 1, 1);
+		//TextureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+
+		unsigned long texture_data_1[SHARED_TEXTURE_WIDTH * SHARED_TEXTURE_HEIGHT];
+
+		D3D11_SUBRESOURCE_DATA Data = {};
+		//将texture的左上，右上，左下，右下分别填充成灰红绿蓝
+		for (int i = 0; i < SHARED_TEXTURE_HEIGHT; i++)
+		{
+			for (int j = 0; j < SHARED_TEXTURE_WIDTH; j++)
+			{
+				if (i >= SHARED_TEXTURE_HEIGHT / 2)
+				{
+					if (j >= SHARED_TEXTURE_WIDTH / 2)
+					{
+						texture_data_1[i * SHARED_TEXTURE_WIDTH + j] = 0xFF00FF00;		//G	Formet:0xAaBbGgRr
+					}
+					else
+					{
+						texture_data_1[i * SHARED_TEXTURE_WIDTH + j] = 0xFFFF0000;		//B
+					}
+				}
+				else
+				{
+					if (j >= SHARED_TEXTURE_WIDTH / 2)
+					{
+						texture_data_1[i * SHARED_TEXTURE_WIDTH + j] = 0xFF0000FF;		//R
+					}
+					else
+					{
+						texture_data_1[i * SHARED_TEXTURE_WIDTH + j] = 0xFF808080;		//Gray
+					}
+				}
+			}
+		}
+		Data.pSysMem = texture_data_1;
+		Data.SysMemPitch = SHARED_TEXTURE_WIDTH * sizeof(unsigned long);		//п
+		Data.SysMemSlicePitch = 0;
+
+		hr = D3d11Device->CreateTexture2D(&TextureDesc, &Data, &Texture);
+
+		IDXGIResource1* DxgiResource1;
+		//hr = Texture->QueryInterface(&DxgiResource1);
+
+		D3D11_TEXTURE2D_DESC textureDesc_dummy = { 0 };
+
+		Texture->GetDesc(&textureDesc_dummy);
+
+		textureDesc_dummy.CPUAccessFlags = D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
+		textureDesc_dummy.Usage = D3D11_USAGE_STAGING;
+		textureDesc_dummy.BindFlags = 0;
+		textureDesc_dummy.MiscFlags = 0;
+		ID3D11Texture2D* cpuTexture = nullptr;
+		ID3D11Texture2D* Texture_dummy = nullptr;
+		hr = D3d11Device->CreateTexture2D(&textureDesc_dummy, nullptr, &cpuTexture);
+
+
+		ID3D11Device1* pDevice1;
+
+		hr = D3d11Device->QueryInterface(__uuidof(ID3D11Device1), (void**)&pDevice1);
+
+		ComPtr<ID3D11Texture2D> SharedTexture;
+		hr = pDevice1->OpenSharedResource1(m_sharedTextureHandle, IID_PPV_ARGS(SharedTexture.GetAddressOf()));
+
+		D3D11_TEXTURE2D_DESC mediaTextureDesc_dummy = { 0 };
+
+		SharedTexture->GetDesc(&mediaTextureDesc_dummy);
+
+		//DX12 Texture -> SharedTexture->cpuTexture
+		D3d11DeviceContext->CopyResource(cpuTexture, SharedTexture.Get());
+		// -> SharedTexture -> DX12 Texture
+		D3d11DeviceContext->CopyResource(SharedTexture.Get(), Texture);
+		D3d11DeviceContext->Flush();
+
+		D3D11_MAPPED_SUBRESOURCE mappedSubresource;
+		HRESULT hres = 0xff;
+		hres = D3d11DeviceContext->Map(cpuTexture, 0, D3D11_MAP_READ, 0, &mappedSubresource);
+		unsigned long* data = (unsigned long*)mappedSubresource.pData;
+		//data指向的memory里面为黑白棋盘格
+
+		D3d11DeviceContext->Unmap(cpuTexture, 0);
+	}
 }
 
 // Generate a simple black and white checkerboard texture.
